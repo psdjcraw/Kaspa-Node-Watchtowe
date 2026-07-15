@@ -83,18 +83,29 @@ All notable changes to Kaspa Node Watchtower are tracked here.
 - Indexer status pages and Prometheus output now include post-Toccata activity
   counters for tx v1, block v2, covenant inputs/outputs/UTXOs/IDs, user lanes,
   SeqCommit blocks, and ZK precompile usage.
+- Indexer status pages and Prometheus output now include a transaction v1
+  debugger for txid/tx hash/sighash sample counts, compute-budget gaps,
+  covenant binding mismatches, and invalid user-lane observations.
+- Indexer status pages and Prometheus output now include Toccata Agent Brief
+  guardrail checks for next-output validation, covenant ID tracking, UTXO-native
+  modeling, v1 hash separation, and exact repo behavior checks.
 - Added `docs/indexer-api-spec.md` to pin the Watchtower-facing indexer
   `/api/health` and `/api/metrics` contract for Toccata schema, fee/mass, and
   activity fields.
 - Added a Covenant Explorer baseline to the Indexer tab and Prometheus output,
   covering top covenant IDs, tx/UTXO/input/output counts, token-like and
   NFT-like heuristics, and latest transaction IDs when exposed by the indexer.
+- Covenant Explorer now also accepts transition counts, successor counts, state
+  commitments, and successor transaction IDs when exposed by the indexer.
 - Added a Lane / SeqCommit Monitor baseline to the Indexer tab and Prometheus
   output, covering active lanes, lane tx/gas, SeqCommit block counts, lane proof
   failures, and top lane activity when exposed by the indexer.
 - Added a ZK / Bridge Watch baseline to the Indexer tab and Prometheus output,
   covering proof-type activity, ZK failures, bridge-lockbox-like candidates,
   locked amounts, unlock counts, and latest transaction IDs.
+- Added a Silverscript Registry baseline to the Indexer tab and Prometheus
+  output for contract names, covenant IDs, source hashes, state-field counts,
+  transition counts, audit status, and latest transaction IDs.
 - Added post-Toccata failed checks for relay fee policy drift, low-fee
   rejections, lane proof failures, and ZK proof failures from indexer metrics.
 - Toccata indexer monitoring now documents and test-covers schema v24

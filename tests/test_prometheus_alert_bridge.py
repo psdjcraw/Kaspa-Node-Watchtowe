@@ -70,6 +70,23 @@ class PrometheusAlertBridgeTest(unittest.TestCase):
         self.assertIn("active_alerts=1 new_alerts=1 resolved_alerts=0", result.stdout)
         self.assertEqual(len(state["fingerprints"]), 1)
 
+    def test_pending_to_firing_transition_does_not_emit_duplicate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            pending = response([watchtower_alert("KaspaWatchtowerCritical", state="pending")])
+            firing = response([watchtower_alert("KaspaWatchtowerCritical", state="firing")])
+
+            first = self.run_bridge(tmp_dir, pending)
+            second = self.run_bridge(tmp_dir, firing)
+            state = json.loads((tmp_dir / "state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(first.returncode, 0)
+        self.assertIn("new_alerts=1", first.stdout)
+        self.assertEqual(second.returncode, 0)
+        self.assertEqual(second.stdout, "")
+        self.assertEqual(state["fingerprints"], ["KaspaWatchtowerCritical:mainnet:critical"])
+        self.assertEqual(state["alerts"][0]["state"], "firing")
+
     def test_partial_recovery_reports_resolved_and_new_active_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)

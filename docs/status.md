@@ -156,18 +156,31 @@ Last verified manually on `2026-07-01`:
 - Indexer tab: post-Toccata tx activity table for tx v1, block v2, covenant
   inputs/outputs/UTXOs/IDs, user lanes, SeqCommit blocks, and ZK precompile
   usage when those `/api/metrics` counters are available
+- Indexer tab: Transaction v1 Debugger for txid/tx hash/sighash sample counts,
+  txid/hash mismatches, sighash mismatches, missing compute budgets, covenant
+  binding mismatches, and invalid user lanes when those `/api/metrics` fields
+  are available
+- Indexer tab: Toccata Agent Brief Checks for next-output validation, covenant
+  ID tracking, UTXO-native modeling, txid/hash/sighash separation, and exact
+  repo behavior checks when the indexer exports those guardrails
 - Toccata visual status: rollup freshness is rendered from schema v24
   `rollupUpdatedAt` so stale trigger-maintained counters are visible before
   operators trust tx v1, covenant, lane, or ZK totals
 - Indexer tab: Covenant Explorer baseline with top covenant IDs, tx/UTXO/input/
   output counts, token-like and NFT-like heuristics, and latest tx IDs when the
   indexer exposes `topCovenants`
+- Indexer tab: Covenant Explorer also renders transition counts, successor
+  counts, state commitments, and successor transaction IDs when the indexer
+  exposes those fields
 - Indexer tab: Lane / SeqCommit Monitor baseline with active lanes, lane tx/gas,
   SeqCommit block counts, lane proof failures, and top lane activity when the
   indexer exposes `topLanes`
 - Indexer tab: ZK / Bridge Watch baseline with proof-type activity, ZK failures,
   bridge-lockbox-like candidates, locked amounts, unlock counts, and latest tx
   IDs when the indexer exposes `topZkProofs` or `bridgeLockboxes`
+- Indexer tab: Silverscript Registry baseline with contract names, covenant IDs,
+  source hashes, state-field counts, transition counts, audit status, and latest
+  transaction IDs when the indexer exposes `silverscriptContracts`
 - Alert checks: post-Toccata indexer metrics now raise failed checks for relay
   fee policy below `100` sompi/gram, low-fee rejections, lane proof failures,
   ZK proof failures, stale Toccata rollups, and missing tx v1/block v2 activity

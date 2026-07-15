@@ -13,6 +13,7 @@ services:
     volumes:
       - ./config.docker.example.json:/config/config.json:ro
       - ./state:/state
+      - /Users/psdjc/.openclaw/canvas:/canvas
       - ${KASPAD_LOG_DIR:?Set KASPAD_LOG_DIR to the host directory containing rusty-kaspa.log}:/node/logs:ro
       - ${KASPAD_DATA_DIR:?Set KASPAD_DATA_DIR to the host kaspad datadir}:/node/datadir:ro
     restart: unless-stopped

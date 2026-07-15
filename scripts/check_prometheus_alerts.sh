@@ -33,6 +33,17 @@ if data.get("status") != "success":
     print("Kaspa Prometheus alert bridge failed: Prometheus API returned non-success status")
     raise SystemExit(1)
 
+def alert_identity(item):
+    return f"{item['alertname']}:{item['node']}:{item['severity']}"
+
+
+def normalize_fingerprint(fingerprint):
+    parts = fingerprint.split(":")
+    if len(parts) >= 4 and parts[0] in {"pending", "firing"}:
+        return ":".join(parts[1:])
+    return fingerprint
+
+
 alerts_by_fingerprint = {}
 for alert in data.get("data", {}).get("alerts", []):
     labels = alert.get("labels") or {}
@@ -49,7 +60,7 @@ for alert in data.get("data", {}).get("alerts", []):
         "summary": annotations.get("summary", ""),
         "description": annotations.get("description", ""),
     }
-    fingerprint = f"{item['state']}:{item['alertname']}:{item['node']}:{item['severity']}"
+    fingerprint = alert_identity(item)
     alerts_by_fingerprint[fingerprint] = item
 
 fingerprints = sorted(alerts_by_fingerprint)
@@ -62,7 +73,9 @@ if state_path.exists():
             previous = json.load(handle)
     except (OSError, json.JSONDecodeError):
         previous = {}
-previous_fingerprints = sorted(set(previous.get("fingerprints") or []))
+previous_fingerprints = sorted(
+    {normalize_fingerprint(fingerprint) for fingerprint in (previous.get("fingerprints") or [])}
+)
 previous_set = set(previous_fingerprints)
 current_set = set(fingerprints)
 new_fingerprints = sorted(current_set - previous_set)

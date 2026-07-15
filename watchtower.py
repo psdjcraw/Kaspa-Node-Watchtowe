@@ -89,6 +89,20 @@ TOCCATA_TX_ACTIVITY_METRICS = [
     ("groth16_tx_count", "Groth16 tx", {"groth16_tx_count", "groth16TxCount"}),
     ("risc0_tx_count", "RISC0 tx", {"risc0_tx_count", "risc0TxCount", "r0_succinct_tx_count", "r0SuccinctTxCount"}),
 ]
+TOCCATA_TX_V1_DEBUG_METRICS = [
+    ("txid_mismatch_count", "txid/hash mismatches", {"txid_mismatch_count", "txidMismatchCount", "tx_hash_mismatch_count", "txHashMismatchCount"}),
+    ("sighash_mismatch_count", "sighash mismatches", {"sighash_mismatch_count", "sighashMismatchCount"}),
+    ("missing_compute_budget_count", "Missing compute budget", {"missing_compute_budget_count", "missingComputeBudgetCount"}),
+    ("covenant_binding_mismatch_count", "Covenant binding mismatches", {"covenant_binding_mismatch_count", "covenantBindingMismatchCount"}),
+    ("invalid_user_lane_count", "Invalid user lanes", {"invalid_user_lane_count", "invalidUserLaneCount"}),
+]
+TOCCATA_AGENT_BRIEF_CHECKS = [
+    ("validates_next_output", "Validates next output", {"validates_next_output", "validatesNextOutput", "next_output_validation", "nextOutputValidation"}),
+    ("tracks_covenant_ids", "Tracks covenant IDs", {"tracks_covenant_ids", "tracksCovenantIds", "covenant_id_lineage", "covenantIdLineage"}),
+    ("avoids_account_state", "Avoids account-state assumptions", {"avoids_account_state", "avoidsAccountState", "utxo_native_model", "utxoNativeModel"}),
+    ("separates_v1_hashes", "Separates txid/hash/sighash", {"separates_v1_hashes", "separatesV1Hashes", "hash_context_split", "hashContextSplit"}),
+    ("checks_repo_behavior", "Checks exact repo behavior", {"checks_repo_behavior", "checksRepoBehavior", "repo_behavior_checked", "repoBehaviorChecked"}),
+]
 
 INVESTMENT_TIMEFRAMES = [
     {"label": "15m", "range": "5d", "interval": "15m"},
@@ -102,18 +116,9 @@ INVESTMENT_ASSETS = [
     {
         "key": "spacex",
         "label": "SpaceX",
-        "symbol": "PRIVATE",
-        "source": "private_valuation",
-        "timeframes": ["1D", "1W", "1M"],
-        "unit": "usd_b",
-        "valuation_marks": [
-            {"date": "2021-10-08", "valuation_b": 100.3},
-            {"date": "2022-05-17", "valuation_b": 125.0},
-            {"date": "2023-01-03", "valuation_b": 137.0},
-            {"date": "2023-07-13", "valuation_b": 150.0},
-            {"date": "2024-06-27", "valuation_b": 210.0},
-            {"date": "2024-12-10", "valuation_b": 350.0},
-        ],
+        "symbol": "SPCX",
+        "yahoo_symbol": "SPCX",
+        "source": "yahoo",
     },
     {"key": "tesla", "label": "Tesla", "symbol": "TSLA", "yahoo_symbol": "TSLA", "source": "yahoo"},
     {"key": "sp500", "label": "S&P 500", "symbol": "SPX", "yahoo_symbol": "^GSPC", "source": "yahoo"},
@@ -3021,12 +3026,13 @@ def fetch_investment_market_data(timeout: float = 5.0) -> dict[str, Any]:
         asset["key"]: {"private": asset.get("source") not in {"yahoo", "bybit_ratio"}, "timeframes": {}}
         for asset in INVESTMENT_ASSETS
     }
+    default_timeframes = [item["label"] for item in INVESTMENT_TIMEFRAMES if not item.get("private_marks")]
     jobs = [
         (asset, timeframe)
         for asset in INVESTMENT_ASSETS
         for timeframe in INVESTMENT_TIMEFRAMES
         if asset.get("source") in {"yahoo", "bybit_ratio", "private_valuation"}
-        and str(timeframe.get("label")) in set(asset.get("timeframes") or [item["label"] for item in INVESTMENT_TIMEFRAMES])
+        and str(timeframe.get("label")) in set(asset.get("timeframes") or default_timeframes)
     ]
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         futures = [executor.submit(fetch_investment_chart, asset, timeframe, timeout) for asset, timeframe in jobs]
@@ -3176,6 +3182,100 @@ def indexer_toccata_activity_status(payload: Any) -> dict[str, Any]:
     }
 
 
+def indexer_tx_v1_debug_status(payload: Any) -> dict[str, Any]:
+    metrics = {}
+    observed = 0
+    failures = 0
+    for key, label, aliases in TOCCATA_TX_V1_DEBUG_METRICS:
+        raw = find_nested_value(payload, aliases)
+        parsed = numeric(raw)
+        if raw is not None:
+            observed += 1
+        if parsed is not None and parsed > 0:
+            failures += int(parsed)
+        metrics[key] = {
+            "label": label,
+            "value": raw,
+            "numeric": parsed,
+            "observed": raw is not None,
+            "active": parsed is not None and parsed > 0,
+        }
+    txid_samples = numeric(find_nested_value(payload, {"txidSampleCount", "txid_sample_count", "txV1DebugSampleCount", "tx_v1_debug_sample_count"}))
+    tx_hash_samples = numeric(find_nested_value(payload, {"txHashSampleCount", "tx_hash_sample_count"}))
+    sighash_samples = numeric(find_nested_value(payload, {"sighashSampleCount", "sighash_sample_count"}))
+    return {
+        "observed": observed > 0 or any(value is not None for value in [txid_samples, tx_hash_samples, sighash_samples]),
+        "ok": failures == 0,
+        "failures": failures,
+        "txid_sample_count": txid_samples,
+        "tx_hash_sample_count": tx_hash_samples,
+        "sighash_sample_count": sighash_samples,
+        "metrics": metrics,
+    }
+
+
+def indexer_agent_brief_status(payload: Any) -> dict[str, Any]:
+    checks = {}
+    ok_count = 0
+    missing_count = 0
+    unknown_count = 0
+    for key, label, aliases in TOCCATA_AGENT_BRIEF_CHECKS:
+        raw = find_nested_value(payload, aliases)
+        state = capability_state(raw)
+        if state == "ok":
+            ok_count += 1
+        elif state == "missing":
+            missing_count += 1
+        else:
+            unknown_count += 1
+        checks[key] = {
+            "label": label,
+            "state": state,
+            "value": raw,
+        }
+    observed = ok_count + missing_count > 0
+    return {
+        "observed": observed,
+        "ok": observed and missing_count == 0 and unknown_count == 0,
+        "ok_count": ok_count,
+        "missing_count": missing_count,
+        "unknown_count": unknown_count,
+        "total": len(TOCCATA_AGENT_BRIEF_CHECKS),
+        "checks": checks,
+    }
+
+
+def indexer_silverscript_registry_status(payload: Any) -> dict[str, Any]:
+    raw_items = find_nested_value(payload, {"silverscriptContracts", "silverscript_contracts", "contractRegistry", "contract_registry"})
+    if not isinstance(raw_items, list):
+        raw_items = []
+    items = []
+    for raw in raw_items[:20]:
+        if not isinstance(raw, dict):
+            continue
+        name = find_nested_value(raw, {"name", "contractName", "contract_name", "label"})
+        covenant_id = find_nested_value(raw, {"covenantId", "covenant_id", "id"})
+        items.append(
+            {
+                "name": str(name or "unnamed"),
+                "covenant_id": None if covenant_id in (None, "") else str(covenant_id),
+                "source_hash": find_nested_value(raw, {"sourceHash", "source_hash", "silverscriptHash", "silverscript_hash"}),
+                "state_fields": numeric(find_nested_value(raw, {"stateFields", "state_fields", "stateFieldCount", "state_field_count"})),
+                "transition_count": numeric(find_nested_value(raw, {"transitionCount", "transition_count", "transitions"})),
+                "audit_status": str(find_nested_value(raw, {"auditStatus", "audit_status", "releaseStatus", "release_status"}) or "unknown"),
+                "latest_tx_id": find_nested_value(raw, {"latestTxId", "latest_tx_id", "transactionId", "transaction_id"}),
+            }
+        )
+    contract_count = numeric(find_nested_value(payload, {"silverscriptContractCount", "silverscript_contract_count", "contractRegistryCount", "contract_registry_count"}))
+    unaudited_count = numeric(find_nested_value(payload, {"silverscriptUnauditedCount", "silverscript_unaudited_count", "unauditedContractCount", "unaudited_contract_count"}))
+    return {
+        "observed": bool(items) or contract_count is not None or unaudited_count is not None,
+        "contract_count": contract_count if contract_count is not None else len(items) if items else None,
+        "unaudited_count": unaudited_count,
+        "items": items,
+    }
+
+
 def truthy_metric(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -3202,6 +3302,10 @@ def indexer_covenant_explorer_status(payload: Any) -> dict[str, Any]:
             "utxo_count": numeric(find_nested_value(raw, {"utxoCount", "utxo_count", "utxos"})),
             "input_count": numeric(find_nested_value(raw, {"inputCount", "input_count", "inputs"})),
             "output_count": numeric(find_nested_value(raw, {"outputCount", "output_count", "outputs"})),
+            "successor_count": numeric(find_nested_value(raw, {"successorCount", "successor_count", "successors"})),
+            "transition_count": numeric(find_nested_value(raw, {"transitionCount", "transition_count", "transitions"})),
+            "state_commitment": find_nested_value(raw, {"stateCommitment", "state_commitment", "p2shState", "p2sh_state"}),
+            "successor_tx_id": find_nested_value(raw, {"successorTxId", "successor_tx_id", "nextTxId", "next_tx_id"}),
             "latest_tx_id": find_nested_value(raw, {"latestTxId", "latest_tx_id", "transactionId", "transaction_id"}),
             "token_like": truthy_metric(find_nested_value(raw, {"tokenLike", "token_like", "fungibleCandidate", "fungible_candidate"})),
             "nft_like": truthy_metric(find_nested_value(raw, {"nftLike", "nft_like", "nftCandidate", "nft_candidate"})),
@@ -3393,9 +3497,12 @@ def extract_indexer_metrics(payload: Any) -> dict[str, Any]:
         "toccata_schema": indexer_toccata_schema_status(payload),
         "fee_mass": indexer_fee_mass_status(payload),
         "toccata_activity": indexer_toccata_activity_status(payload),
+        "tx_v1_debug": indexer_tx_v1_debug_status(payload),
+        "agent_brief": indexer_agent_brief_status(payload),
         "covenant_explorer": indexer_covenant_explorer_status(payload),
         "lane_monitor": indexer_lane_monitor_status(payload),
         "zk_bridge_watch": indexer_zk_bridge_watch_status(payload),
+        "silverscript_registry": indexer_silverscript_registry_status(payload),
         "payload": payload,
     }
 
@@ -8178,9 +8285,12 @@ def indexer_watch_panel(report: dict[str, Any], state: dict[str, Any]) -> str:
     toccata_schema = metrics.get("toccata_schema") or {}
     fee_mass = metrics.get("fee_mass") or {}
     toccata_activity = metrics.get("toccata_activity") or {}
+    tx_v1_debug = metrics.get("tx_v1_debug") or {}
+    agent_brief = metrics.get("agent_brief") or {}
     covenant_explorer = metrics.get("covenant_explorer") or {}
     lane_monitor = metrics.get("lane_monitor") or {}
     zk_bridge_watch = metrics.get("zk_bridge_watch") or {}
+    silverscript_registry = metrics.get("silverscript_registry") or {}
     capability_rows = "\n".join(
         html_row(
             [
@@ -8211,6 +8321,26 @@ def indexer_watch_panel(report: dict[str, Any], state: dict[str, Any]) -> str:
         )
         for key, item in (toccata_activity.get("metrics") or {}).items()
     ) or html_row(["No post-Toccata tx activity metrics exposed", "unknown", ""])
+    tx_v1_debug_rows = "\n".join(
+        html_row(
+            [
+                item.get("label") or key,
+                "active" if item.get("active") else "observed" if item.get("observed") else "unknown",
+                "" if item.get("value") is None else item.get("value"),
+            ]
+        )
+        for key, item in (tx_v1_debug.get("metrics") or {}).items()
+    ) or html_row(["No transaction v1 debug metrics exposed", "unknown", ""])
+    agent_brief_rows = "\n".join(
+        html_row(
+            [
+                item.get("label") or key,
+                item.get("state") or "unknown",
+                "" if item.get("value") is None else item.get("value"),
+            ]
+        )
+        for key, item in (agent_brief.get("checks") or {}).items()
+    ) or html_row(["No Toccata agent-brief checks exposed", "unknown", ""])
     covenant_rows = "\n".join(
         html_row(
             [
@@ -8219,13 +8349,17 @@ def indexer_watch_panel(report: dict[str, Any], state: dict[str, Any]) -> str:
                 item.get("utxo_count", "unknown"),
                 item.get("input_count", "unknown"),
                 item.get("output_count", "unknown"),
+                item.get("transition_count", "unknown"),
+                item.get("successor_count", "unknown"),
+                short_hash(item.get("state_commitment")) or "",
+                short_hash(item.get("successor_tx_id")) or "",
                 "yes" if item.get("token_like") else "no",
                 "yes" if item.get("nft_like") else "no",
                 short_hash(item.get("latest_tx_id")) or "",
             ]
         )
         for item in (covenant_explorer.get("items") or [])
-    ) or html_row(["No covenant activity exposed", "", "", "", "", "", "", ""])
+    ) or html_row(["No covenant activity exposed", "", "", "", "", "", "", "", "", "", "", ""])
     lane_rows = "\n".join(
         html_row(
             [
@@ -8264,6 +8398,20 @@ def indexer_watch_panel(report: dict[str, Any], state: dict[str, Any]) -> str:
         )
         for item in (zk_bridge_watch.get("bridge_items") or [])
     ) or html_row(["No bridge lockbox candidates exposed", "", "", "", "", ""])
+    silverscript_rows = "\n".join(
+        html_row(
+            [
+                item.get("name") or "unnamed",
+                item.get("covenant_id") or "",
+                short_hash(item.get("source_hash")) or "",
+                item.get("state_fields", "unknown"),
+                item.get("transition_count", "unknown"),
+                item.get("audit_status") or "unknown",
+                short_hash(item.get("latest_tx_id")) or "",
+            ]
+        )
+        for item in (silverscript_registry.get("items") or [])
+    ) or html_row(["No Silverscript registry entries exposed", "", "", "", "", "", ""])
     checkpoint_age = metrics.get("checkpoint_age_seconds")
     checkpoint_age_text = "unknown" if checkpoint_age is None else f"{float(checkpoint_age):.1f}s"
     return f"""
@@ -8275,9 +8423,12 @@ def indexer_watch_panel(report: dict[str, Any], state: dict[str, Any]) -> str:
       {visual_card("Toccata Schema", f"{toccata_schema.get('supported', 0)}/{toccata_schema.get('total', len(TOCCATA_INDEXER_CAPABILITIES))}", f"core={toccata_schema.get('core_supported', 0)}/{toccata_schema.get('core_total', len(TOCCATA_INDEXER_CORE_CAPABILITIES))} missing={toccata_schema.get('missing', 0)}", "ok" if toccata_schema.get("core_ok") else "warn")}
       {visual_card("Fee/Mass", f"{fee_mass.get('observed', 0)}/{fee_mass.get('total', len(TOCCATA_FEE_MASS_METRICS))}", f"relay_fee_ok={fee_mass.get('relay_fee_ok', 'unknown')}", "ok" if fee_mass.get("ok") else "warn")}
       {visual_card("Tx Activity", f"{toccata_activity.get('active', 0)} active", f"observed={toccata_activity.get('observed', 0)}/{toccata_activity.get('total', len(TOCCATA_TX_ACTIVITY_METRICS))}", "neutral")}
+      {visual_card("Tx v1 Debug", tx_v1_debug.get("failures", "unknown"), f"samples={tx_v1_debug.get('txid_sample_count', 'unknown')}", "warn" if numeric(tx_v1_debug.get("failures")) else "neutral")}
+      {visual_card("Agent Brief", f"{agent_brief.get('ok_count', 0)}/{agent_brief.get('total', len(TOCCATA_AGENT_BRIEF_CHECKS))}", f"missing={agent_brief.get('missing_count', 'unknown')}", "ok" if agent_brief.get("ok") else "warn" if agent_brief.get("observed") else "neutral")}
       {visual_card("Covenants", covenant_explorer.get("covenant_id_count", "unknown"), f"tokens={covenant_explorer.get('token_candidate_count', 'unknown')} nfts={covenant_explorer.get('nft_candidate_count', 'unknown')}", "neutral")}
       {visual_card("Lanes", lane_monitor.get("active_lanes", "unknown"), f"proof_failures={lane_monitor.get('lane_proof_failures', 'unknown')}", "warn" if numeric(lane_monitor.get("lane_proof_failures")) else "neutral")}
       {visual_card("ZK / Bridge", zk_bridge_watch.get("zk_tx_count", "unknown"), f"bridge_lockboxes={zk_bridge_watch.get('bridge_lockbox_count', 'unknown')}", "warn" if numeric(zk_bridge_watch.get("zk_failure_count")) else "neutral")}
+      {visual_card("Silverscript", silverscript_registry.get("contract_count", "unknown"), f"unaudited={silverscript_registry.get('unaudited_count', 'unknown')}", "warn" if numeric(silverscript_registry.get("unaudited_count")) else "neutral")}
       {visual_card("Watch Addresses", len(targets), f"enabled={watch.get('enabled', False)}", "neutral")}
       {visual_card("Watched Events", len(events), f"new={len(watch.get('new_events') or [])}", "neutral")}
     </section>
@@ -8337,6 +8488,32 @@ def indexer_watch_panel(report: dict[str, Any], state: dict[str, Any]) -> str:
       </table>
     </section>
     <section class="panel">
+      <h2>Transaction v1 Debugger</h2>
+      <div class="context-grid">
+        <div class="context-item"><div class="context-label">Failures</div><div class="context-value">{html.escape(str(tx_v1_debug.get('failures', 'unknown')))}</div></div>
+        <div class="context-item"><div class="context-label">Txid Samples</div><div class="context-value">{html.escape(str(tx_v1_debug.get('txid_sample_count', 'unknown')))}</div></div>
+        <div class="context-item"><div class="context-label">Tx Hash Samples</div><div class="context-value">{html.escape(str(tx_v1_debug.get('tx_hash_sample_count', 'unknown')))}</div></div>
+        <div class="context-item"><div class="context-label">Sighash Samples</div><div class="context-value">{html.escape(str(tx_v1_debug.get('sighash_sample_count', 'unknown')))}</div></div>
+      </div>
+      <table>
+        <thead>{html_row(["Check", "State", "Observed Value"], "th")}</thead>
+        <tbody>{tx_v1_debug_rows}</tbody>
+      </table>
+    </section>
+    <section class="panel">
+      <h2>Toccata Agent Brief Checks</h2>
+      <div class="context-grid">
+        <div class="context-item"><div class="context-label">OK</div><div class="context-value">{html.escape(str(agent_brief.get('ok_count', 0)))}/{html.escape(str(agent_brief.get('total', len(TOCCATA_AGENT_BRIEF_CHECKS))))}</div></div>
+        <div class="context-item"><div class="context-label">Missing</div><div class="context-value">{html.escape(str(agent_brief.get('missing_count', 'unknown')))}</div></div>
+        <div class="context-item"><div class="context-label">Unknown</div><div class="context-value">{html.escape(str(agent_brief.get('unknown_count', 'unknown')))}</div></div>
+        <div class="context-item"><div class="context-label">Observed</div><div class="context-value">{html.escape(str(agent_brief.get('observed', False)))}</div></div>
+      </div>
+      <table>
+        <thead>{html_row(["Guardrail", "State", "Observed Value"], "th")}</thead>
+        <tbody>{agent_brief_rows}</tbody>
+      </table>
+    </section>
+    <section class="panel">
       <h2>Covenant Explorer</h2>
       <div class="context-grid">
         <div class="context-item"><div class="context-label">Covenant IDs</div><div class="context-value">{html.escape(str(covenant_explorer.get('covenant_id_count', 'unknown')))}</div></div>
@@ -8345,7 +8522,7 @@ def indexer_watch_panel(report: dict[str, Any], state: dict[str, Any]) -> str:
         <div class="context-item"><div class="context-label">Observed</div><div class="context-value">{html.escape(str(covenant_explorer.get('observed', False)))}</div></div>
       </div>
       <table>
-        <thead>{html_row(["Covenant ID", "Tx", "UTXO", "Inputs", "Outputs", "Token", "NFT", "Latest Tx"], "th")}</thead>
+        <thead>{html_row(["Covenant ID", "Tx", "UTXO", "Inputs", "Outputs", "Transitions", "Successors", "State", "Next Tx", "Token", "NFT", "Latest Tx"], "th")}</thead>
         <tbody>{covenant_rows}</tbody>
       </table>
     </section>
@@ -8380,6 +8557,18 @@ def indexer_watch_panel(report: dict[str, Any], state: dict[str, Any]) -> str:
       <table>
         <thead>{html_row(["Label", "Covenant ID", "Locked", "Unlock Tx", "Proof", "Latest Tx"], "th")}</thead>
         <tbody>{bridge_rows}</tbody>
+      </table>
+    </section>
+    <section class="panel">
+      <h2>Silverscript Registry</h2>
+      <div class="context-grid">
+        <div class="context-item"><div class="context-label">Contracts</div><div class="context-value">{html.escape(str(silverscript_registry.get('contract_count', 'unknown')))}</div></div>
+        <div class="context-item"><div class="context-label">Unaudited</div><div class="context-value">{html.escape(str(silverscript_registry.get('unaudited_count', 'unknown')))}</div></div>
+        <div class="context-item"><div class="context-label">Observed</div><div class="context-value">{html.escape(str(silverscript_registry.get('observed', False)))}</div></div>
+      </div>
+      <table>
+        <thead>{html_row(["Name", "Covenant ID", "Source", "State Fields", "Transitions", "Audit", "Latest Tx"], "th")}</thead>
+        <tbody>{silverscript_rows}</tbody>
       </table>
     </section>
     <section class="layout">
@@ -10374,7 +10563,7 @@ def write_status_page(
       {{ label: "1M", range: "10y", interval: "1mo" }},
     ];
     const investmentAssets = [
-      {{ key: "spacex", label: "SpaceX", symbol: "PRIVATE", source: "private_valuation", note: "Private valuation marks, not a live public ticker", unit: "usd_b", timeframes: ["1D", "1W", "1M"] }},
+      {{ key: "spacex", label: "SpaceX", symbol: "SPCX", yahooSymbol: "SPCX", source: "yahoo", note: "Yahoo Finance" }},
       {{ key: "tesla", label: "Tesla", symbol: "TSLA", yahooSymbol: "TSLA", source: "yahoo", note: "Yahoo Finance" }},
       {{ key: "sp500", label: "S&P 500", symbol: "SPX", yahooSymbol: "^GSPC", source: "yahoo", note: "Yahoo Finance" }},
       {{ key: "nasdaq", label: "NASDAQ", symbol: "IXIC", yahooSymbol: "^IXIC", source: "yahoo", note: "Yahoo Finance" }},
@@ -10386,7 +10575,7 @@ def write_status_page(
       {{ key: "usdkrw", label: "USD/KRW", symbol: "KRW=X", yahooSymbol: "KRW=X", source: "yahoo", note: "Yahoo Finance FX" }},
       {{ key: "kasbtc_sats", label: "KAS/BTC sats", symbol: "KASUSD/BTCUSD*100000000", source: "bybit_ratio", note: "Bybit spot KASUSDT/BTCUSDT", unit: "sats" }},
     ];
-    const investmentPreloadedData = {investment_data_json};
+    let investmentPreloadedData = {investment_data_json};
 
     function investmentChartId(assetKey, timeframe) {{
       const label = typeof timeframe === "string" ? timeframe : timeframe.label;
@@ -10620,12 +10809,28 @@ def write_status_page(
       }}
     }}
 
-    function hydrateInvestmentWatchlist() {{
+    function investmentDataUrl() {{
+      const url = new URL("investment-watchlist.json", window.location.href);
+      url.searchParams.set("t", String(Date.now()));
+      return url.toString();
+    }}
+
+    async function fetchInvestmentWatchlistData() {{
+      const response = await fetch(investmentDataUrl(), {{ cache: "no-store" }});
+      if (!response.ok) {{
+        throw new Error("HTTP " + response.status);
+      }}
+      const payload = await response.json();
+      return payload.assets || payload;
+    }}
+
+    function hydrateInvestmentWatchlist(dataSource) {{
+      const watchlistData = dataSource || investmentPreloadedData;
       investmentAssets.forEach((asset) => {{
-        const assetTimeframes = new Set(asset.timeframes || investmentTimeframes.map((item) => item.label));
+        const assetTimeframes = new Set(asset.timeframes || investmentTimeframes.filter((item) => !item.privateMarks).map((item) => item.label));
         investmentTimeframes.filter((timeframe) => assetTimeframes.has(timeframe.label)).forEach((timeframe) => {{
           const status = document.getElementById(investmentStatusId(asset.key, timeframe));
-          const data = (((investmentPreloadedData || {{}})[asset.key] || {{}}).timeframes || {{}})[timeframe.label];
+          const data = (((watchlistData || {{}})[asset.key] || {{}}).timeframes || {{}})[timeframe.label];
           if (data && data.ok && Array.isArray(data.rows) && data.rows.length) {{
             drawInvestmentChart(data.rows, asset, timeframe);
             return;
@@ -10639,6 +10844,11 @@ def write_status_page(
     }}
 
     async function refreshInvestmentWatchlist() {{
+      try {{
+        investmentPreloadedData = await fetchInvestmentWatchlistData();
+      }} catch (error) {{
+        console.warn("Investment watchlist refresh failed", error);
+      }}
       hydrateInvestmentWatchlist();
     }}
 
@@ -10683,7 +10893,7 @@ def write_status_page(
 
         const grid = document.createElement("div");
         grid.className = "investment-card-grid";
-        const assetTimeframes = new Set(asset.timeframes || investmentTimeframes.map((item) => item.label));
+        const assetTimeframes = new Set(asset.timeframes || investmentTimeframes.filter((item) => !item.privateMarks).map((item) => item.label));
         investmentTimeframes.filter((timeframe) => assetTimeframes.has(timeframe.label)).forEach((timeframe) => {{
           const card = document.createElement("section");
           card.className = "investment-card";
@@ -14072,6 +14282,16 @@ def write_status_page(
     path.write_text(page, encoding="utf-8")
 
 
+def write_investment_market_data_file(status_page_path: Path, investment_data: dict[str, Any]) -> None:
+    status_page_path.parent.mkdir(parents=True, exist_ok=True)
+    data_path = status_page_path.with_name("investment-watchlist.json")
+    payload = {
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "assets": investment_data or {},
+    }
+    data_path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+
+
 def alert(config: dict) -> int:
     state_path = Path(config.get("state_path") or DEFAULT_CONFIG["state_path"])
     status_page_path = Path(config.get("status_page_path") or DEFAULT_CONFIG["status_page_path"])
@@ -14159,8 +14379,10 @@ def alert(config: dict) -> int:
     save_state(state_path, state)
     recovery_records = recent_recovery_records(config)
     investment_data = fetch_investment_market_data()
+    write_investment_market_data_file(status_page_path, investment_data)
     write_status_page(status_page_path, report, state, benchmark_path, recovery_records, history_db_path, market_snapshot_path, investment_data)
     if canvas_status_page:
+        write_investment_market_data_file(Path(canvas_status_page), investment_data)
         write_status_page(Path(canvas_status_page), report, state, benchmark_path, recovery_records, history_db_path, market_snapshot_path, investment_data)
     write_stream_page(stream_page_path, report, state, benchmark_path, market_snapshot_path)
     if canvas_stream_page:
@@ -16233,6 +16455,29 @@ def format_prometheus_metrics(
             metric.get("numeric"),
             {**node_labels, "metric": metric_key, "label": metric.get("label") or metric_key},
         )
+    tx_v1_debug = indexer_metrics.get("tx_v1_debug") or {}
+    add_prometheus_metric(lines, "kaspa_watchtower_indexer_tx_v1_debug_failures", tx_v1_debug.get("failures"), node_labels)
+    add_prometheus_metric(lines, "kaspa_watchtower_indexer_tx_v1_debug_txid_samples", tx_v1_debug.get("txid_sample_count"), node_labels)
+    add_prometheus_metric(lines, "kaspa_watchtower_indexer_tx_v1_debug_tx_hash_samples", tx_v1_debug.get("tx_hash_sample_count"), node_labels)
+    add_prometheus_metric(lines, "kaspa_watchtower_indexer_tx_v1_debug_sighash_samples", tx_v1_debug.get("sighash_sample_count"), node_labels)
+    for metric_key, metric in (tx_v1_debug.get("metrics") or {}).items():
+        add_prometheus_metric(
+            lines,
+            "kaspa_watchtower_indexer_tx_v1_debug_value",
+            metric.get("numeric"),
+            {**node_labels, "metric": metric_key, "label": metric.get("label") or metric_key},
+        )
+    agent_brief = indexer_metrics.get("agent_brief") or {}
+    add_prometheus_metric(lines, "kaspa_watchtower_indexer_agent_brief_ok", agent_brief.get("ok_count"), node_labels)
+    add_prometheus_metric(lines, "kaspa_watchtower_indexer_agent_brief_missing", agent_brief.get("missing_count"), node_labels)
+    add_prometheus_metric(lines, "kaspa_watchtower_indexer_agent_brief_unknown", agent_brief.get("unknown_count"), node_labels)
+    for check_key, check in (agent_brief.get("checks") or {}).items():
+        add_prometheus_metric(
+            lines,
+            "kaspa_watchtower_indexer_agent_brief_state",
+            schema_state_values.get(str(check.get("state") or "unknown"), -1),
+            {**node_labels, "check": check_key, "label": check.get("label") or check_key},
+        )
     covenant_explorer = indexer_metrics.get("covenant_explorer") or {}
     add_prometheus_metric(lines, "kaspa_watchtower_indexer_covenant_ids", covenant_explorer.get("covenant_id_count"), node_labels)
     add_prometheus_metric(lines, "kaspa_watchtower_indexer_covenant_token_candidates", covenant_explorer.get("token_candidate_count"), node_labels)
@@ -16242,6 +16487,8 @@ def format_prometheus_metrics(
         add_prometheus_metric(lines, "kaspa_watchtower_indexer_covenant_tx_count", item.get("tx_count"), covenant_labels)
         add_prometheus_metric(lines, "kaspa_watchtower_indexer_covenant_utxo_count", item.get("utxo_count"), covenant_labels)
         add_prometheus_metric(lines, "kaspa_watchtower_indexer_covenant_output_count", item.get("output_count"), covenant_labels)
+        add_prometheus_metric(lines, "kaspa_watchtower_indexer_covenant_transition_count", item.get("transition_count"), covenant_labels)
+        add_prometheus_metric(lines, "kaspa_watchtower_indexer_covenant_successor_count", item.get("successor_count"), covenant_labels)
         add_prometheus_metric(lines, "kaspa_watchtower_indexer_covenant_token_like", bool(item.get("token_like")), covenant_labels)
         add_prometheus_metric(lines, "kaspa_watchtower_indexer_covenant_nft_like", bool(item.get("nft_like")), covenant_labels)
     lane_monitor = indexer_metrics.get("lane_monitor") or {}
@@ -16275,6 +16522,18 @@ def format_prometheus_metrics(
         }
         add_prometheus_metric(lines, "kaspa_watchtower_indexer_bridge_locked_kas", kas_from_sompi(item.get("locked_amount_sompi")), bridge_labels)
         add_prometheus_metric(lines, "kaspa_watchtower_indexer_bridge_unlock_tx_count_by_lockbox", item.get("unlock_tx_count"), bridge_labels)
+    silverscript_registry = indexer_metrics.get("silverscript_registry") or {}
+    add_prometheus_metric(lines, "kaspa_watchtower_indexer_silverscript_contracts", silverscript_registry.get("contract_count"), node_labels)
+    add_prometheus_metric(lines, "kaspa_watchtower_indexer_silverscript_unaudited", silverscript_registry.get("unaudited_count"), node_labels)
+    for item in (silverscript_registry.get("items") or [])[:10]:
+        contract_labels = {
+            **node_labels,
+            "name": item.get("name", "unnamed"),
+            "covenant_id": item.get("covenant_id") or "unknown",
+            "audit_status": item.get("audit_status") or "unknown",
+        }
+        add_prometheus_metric(lines, "kaspa_watchtower_indexer_silverscript_state_fields", item.get("state_fields"), contract_labels)
+        add_prometheus_metric(lines, "kaspa_watchtower_indexer_silverscript_transitions", item.get("transition_count"), contract_labels)
     add_prometheus_metric(lines, "kaspa_watchtower_watch_readiness_ok", watch_readiness_ok(report), node_labels)
     add_prometheus_metric(lines, "kaspa_watchtower_indexer_watch_enabled", bool(indexer_watch.get("enabled")), node_labels)
     add_prometheus_metric(lines, "kaspa_watchtower_indexer_watch_ok", bool(indexer_watch.get("ok")), node_labels)

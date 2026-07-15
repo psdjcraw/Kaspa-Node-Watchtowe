@@ -184,6 +184,21 @@ class WatchtowerUnitTests(unittest.TestCase):
                         "zkProofFailures": 0,
                         "bridgeLockboxCount": 1,
                         "bridgeUnlockCount": 0,
+                        "txidSampleCount": 9,
+                        "txHashSampleCount": 9,
+                        "sighashSampleCount": 4,
+                        "txidMismatchCount": 0,
+                        "sighashMismatchCount": 0,
+                        "missingComputeBudgetCount": 0,
+                        "covenantBindingMismatchCount": 0,
+                        "invalidUserLaneCount": 0,
+                        "validatesNextOutput": True,
+                        "tracksCovenantIds": True,
+                        "avoidsAccountState": True,
+                        "separatesV1Hashes": True,
+                        "checksRepoBehavior": True,
+                        "silverscriptContractCount": 1,
+                        "silverscriptUnauditedCount": 1,
                         "tokenCandidateCount": 1,
                         "nftCandidateCount": 1,
                         "laneProofFailures": 0,
@@ -196,6 +211,10 @@ class WatchtowerUnitTests(unittest.TestCase):
                                 "outputCount": 4,
                                 "tokenLike": True,
                                 "nftLike": False,
+                                "transitionCount": 6,
+                                "successorCount": 5,
+                                "stateCommitment": "4" * 64,
+                                "successorTxId": "5" * 64,
                                 "latestTxId": "b" * 64,
                             },
                             {
@@ -238,6 +257,17 @@ class WatchtowerUnitTests(unittest.TestCase):
                                 "latestTxId": "3" * 64,
                             }
                         ],
+                        "silverscriptContracts": [
+                            {
+                                "name": "Counter",
+                                "covenantId": "a" * 64,
+                                "sourceHash": "6" * 64,
+                                "stateFields": 1,
+                                "transitionCount": 1,
+                                "auditStatus": "experimental",
+                                "latestTxId": "7" * 64,
+                            }
+                        ],
                     },
                 },
             ],
@@ -259,16 +289,22 @@ class WatchtowerUnitTests(unittest.TestCase):
         self.assertEqual(status["metrics"]["toccata_activity"]["active"], 12)
         self.assertLessEqual(status["metrics"]["toccata_activity"]["rollup_age_seconds"], 60)
         self.assertEqual(status["metrics"]["toccata_activity"]["metrics"]["risc0_tx_count"]["numeric"], 0)
+        self.assertTrue(status["metrics"]["tx_v1_debug"]["observed"])
+        self.assertEqual(status["metrics"]["tx_v1_debug"]["failures"], 0)
+        self.assertEqual(status["metrics"]["agent_brief"]["ok_count"], 5)
         self.assertTrue(status["metrics"]["covenant_explorer"]["observed"])
         self.assertEqual(status["metrics"]["covenant_explorer"]["covenant_id_count"], 2)
         self.assertEqual(status["metrics"]["covenant_explorer"]["token_candidate_count"], 1)
         self.assertEqual(status["metrics"]["covenant_explorer"]["items"][0]["tx_count"], 7)
+        self.assertEqual(status["metrics"]["covenant_explorer"]["items"][0]["transition_count"], 6)
         self.assertTrue(status["metrics"]["lane_monitor"]["observed"])
         self.assertEqual(status["metrics"]["lane_monitor"]["active_lanes"], 1)
         self.assertEqual(status["metrics"]["lane_monitor"]["items"][0]["gas_total"], 7500)
         self.assertTrue(status["metrics"]["zk_bridge_watch"]["observed"])
         self.assertEqual(status["metrics"]["zk_bridge_watch"]["bridge_lockbox_count"], 1)
         self.assertEqual(status["metrics"]["zk_bridge_watch"]["bridge_items"][0]["locked_amount_sompi"], 300_000_000)
+        self.assertTrue(status["metrics"]["silverscript_registry"]["observed"])
+        self.assertEqual(status["metrics"]["silverscript_registry"]["items"][0]["name"], "Counter")
 
     def test_fetch_optional_indexer_status_flags_stale_metrics(self):
         config = copy.deepcopy(watchtower.DEFAULT_CONFIG)
@@ -1244,6 +1280,28 @@ class WatchtowerUnitTests(unittest.TestCase):
                             "risc0_tx_count": {"label": "RISC0 tx", "numeric": 0, "value": 0, "observed": True, "active": False},
                         },
                     },
+                    "tx_v1_debug": {
+                        "observed": True,
+                        "ok": True,
+                        "failures": 0,
+                        "txid_sample_count": 9,
+                        "tx_hash_sample_count": 9,
+                        "sighash_sample_count": 4,
+                        "metrics": {
+                            "txid_mismatch_count": {"label": "txid/hash mismatches", "numeric": 0, "value": 0, "observed": True, "active": False}
+                        },
+                    },
+                    "agent_brief": {
+                        "observed": True,
+                        "ok": True,
+                        "ok_count": 5,
+                        "missing_count": 0,
+                        "unknown_count": 0,
+                        "total": 5,
+                        "checks": {
+                            "separates_v1_hashes": {"label": "Separates txid/hash/sighash", "state": "ok", "value": True}
+                        },
+                    },
                     "covenant_explorer": {
                         "observed": True,
                         "covenant_id_count": 2,
@@ -1256,6 +1314,8 @@ class WatchtowerUnitTests(unittest.TestCase):
                                 "utxo_count": 3,
                                 "input_count": 2,
                                 "output_count": 4,
+                                "transition_count": 6,
+                                "successor_count": 5,
                                 "latest_tx_id": "b" * 64,
                                 "token_like": True,
                                 "nft_like": False,
@@ -1305,6 +1365,22 @@ class WatchtowerUnitTests(unittest.TestCase):
                                 "unlock_tx_count": 0,
                                 "proof_type": "Groth16",
                                 "latest_tx_id": "3" * 64,
+                            }
+                        ],
+                    },
+                    "silverscript_registry": {
+                        "observed": True,
+                        "contract_count": 1,
+                        "unaudited_count": 1,
+                        "items": [
+                            {
+                                "name": "Counter",
+                                "covenant_id": "a" * 64,
+                                "source_hash": "6" * 64,
+                                "state_fields": 1,
+                                "transition_count": 1,
+                                "audit_status": "experimental",
+                                "latest_tx_id": "7" * 64,
                             }
                         ],
                     },
@@ -1525,9 +1601,15 @@ class WatchtowerUnitTests(unittest.TestCase):
         self.assertIn('kaspa_watchtower_indexer_toccata_rollup_age_seconds{node="test-node"} 45', metrics)
         self.assertIn('kaspa_watchtower_indexer_toccata_activity_value{label="Covenant tx",metric="covenant_tx_count",node="test-node"} 2', metrics)
         self.assertIn('kaspa_watchtower_indexer_toccata_activity_value{label="RISC0 tx",metric="risc0_tx_count",node="test-node"} 0', metrics)
+        self.assertIn('kaspa_watchtower_indexer_tx_v1_debug_failures{node="test-node"} 0', metrics)
+        self.assertIn('kaspa_watchtower_indexer_tx_v1_debug_txid_samples{node="test-node"} 9', metrics)
+        self.assertIn('kaspa_watchtower_indexer_tx_v1_debug_value{label="txid/hash mismatches",metric="txid_mismatch_count",node="test-node"} 0', metrics)
+        self.assertIn('kaspa_watchtower_indexer_agent_brief_ok{node="test-node"} 5', metrics)
+        self.assertIn('kaspa_watchtower_indexer_agent_brief_state{check="separates_v1_hashes",label="Separates txid/hash/sighash",node="test-node"} 1', metrics)
         self.assertIn('kaspa_watchtower_indexer_covenant_ids{node="test-node"} 2', metrics)
         self.assertIn('kaspa_watchtower_indexer_covenant_token_candidates{node="test-node"} 1', metrics)
         self.assertIn('kaspa_watchtower_indexer_covenant_tx_count{covenant_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",node="test-node"} 7', metrics)
+        self.assertIn('kaspa_watchtower_indexer_covenant_transition_count{covenant_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",node="test-node"} 6', metrics)
         self.assertIn('kaspa_watchtower_indexer_covenant_token_like{covenant_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",node="test-node"} 1', metrics)
         self.assertIn('kaspa_watchtower_indexer_active_user_lanes{node="test-node"} 1', metrics)
         self.assertIn('kaspa_watchtower_indexer_lane_proof_failures{node="test-node"} 0', metrics)
@@ -1537,6 +1619,8 @@ class WatchtowerUnitTests(unittest.TestCase):
         self.assertIn('kaspa_watchtower_indexer_zk_top_tx_count{node="test-node",proof_type="Groth16"} 1', metrics)
         self.assertIn('kaspa_watchtower_indexer_bridge_lockboxes{node="test-node"} 1', metrics)
         self.assertIn('kaspa_watchtower_indexer_bridge_locked_kas{covenant_id="2222222222222222222222222222222222222222222222222222222222222222",label="test-bridge",node="test-node"} 3', metrics)
+        self.assertIn('kaspa_watchtower_indexer_silverscript_contracts{node="test-node"} 1', metrics)
+        self.assertIn('kaspa_watchtower_indexer_silverscript_transitions{audit_status="experimental",covenant_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",name="Counter",node="test-node"} 1', metrics)
         self.assertIn('kaspa_watchtower_watch_readiness_ok{node="test-node"} 1', metrics)
         self.assertIn('kaspa_watchtower_indexer_watch_enabled{node="test-node"} 1', metrics)
         self.assertIn('kaspa_watchtower_indexer_watch_events_total{node="test-node"} 1', metrics)
@@ -3840,19 +3924,40 @@ class WatchtowerUnitTests(unittest.TestCase):
         self.assertEqual(rows[1]["low"], 100)
         self.assertEqual(rows[1]["close"], 150)
 
-    def test_investment_market_data_preloads_spacex_valuation_candles(self):
+    def test_investment_market_data_preloads_spacex_ticker_candles(self):
+        payload = {
+            "chart": {
+                "result": [
+                    {
+                        "timestamp": [1, 2],
+                        "indicators": {
+                            "quote": [
+                                {
+                                    "open": [100, 101],
+                                    "high": [102, 103],
+                                    "low": [99, 100],
+                                    "close": [101, 102],
+                                    "volume": [1000, 1100],
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        }
         with (
             mock.patch("watchtower.fetch_json_url", side_effect=OSError("skip bybit")),
-            mock.patch("watchtower.fetch_json_url_with_user_agent", side_effect=OSError("skip yahoo")),
+            mock.patch("watchtower.fetch_json_url_with_user_agent", return_value=payload) as yahoo,
         ):
             data = watchtower.fetch_investment_market_data(timeout=0.1)
 
         spacex = data["spacex"]["timeframes"]
 
-        self.assertEqual(set(spacex), {"1D", "1W", "1M"})
-        self.assertTrue(spacex["1D"]["ok"])
-        self.assertEqual(spacex["1D"]["source"], "Private valuation marks")
-        self.assertGreaterEqual(len(spacex["1D"]["rows"]), 2)
+        self.assertEqual(set(spacex), {"15m", "4h", "1D", "1W", "1M"})
+        self.assertTrue(spacex["15m"]["ok"])
+        self.assertEqual(spacex["15m"]["source"], "Yahoo Finance")
+        self.assertGreaterEqual(len(spacex["15m"]["rows"]), 2)
+        self.assertTrue(any("/SPCX?" in call.args[0] for call in yahoo.call_args_list))
 
     def test_market_spot_orderbook_metrics_normalize_venue_payloads(self):
         payload = {
@@ -4622,6 +4727,10 @@ class WatchtowerUnitTests(unittest.TestCase):
             self.assertIn("No Toccata fee/mass metrics exposed", html)
             self.assertIn("Post-Toccata Tx Activity", html)
             self.assertIn("No post-Toccata tx activity metrics exposed", html)
+            self.assertIn("Transaction v1 Debugger", html)
+            self.assertIn("No transaction v1 debug metrics exposed", html)
+            self.assertIn("Toccata Agent Brief Checks", html)
+            self.assertIn("No Toccata agent-brief checks exposed", html)
             self.assertIn("Covenant Explorer", html)
             self.assertIn("No covenant activity exposed", html)
             self.assertIn("Lane / SeqCommit Monitor", html)
@@ -4629,6 +4738,8 @@ class WatchtowerUnitTests(unittest.TestCase):
             self.assertIn("ZK / Bridge Watch", html)
             self.assertIn("No ZK proof activity exposed", html)
             self.assertIn("No bridge lockbox candidates exposed", html)
+            self.assertIn("Silverscript Registry", html)
+            self.assertIn("No Silverscript registry entries exposed", html)
             self.assertIn("KAS/USDT 15m", html)
             self.assertIn("KAS/USDT 4h", html)
             self.assertIn("KAS/USDT 1D", html)
@@ -4661,9 +4772,9 @@ class WatchtowerUnitTests(unittest.TestCase):
             self.assertIn('id="investment-chart-panels"', html)
             self.assertIn("investmentAssets", html)
             self.assertIn('label: "SpaceX"', html)
-            self.assertIn('source: "private_valuation"', html)
-            self.assertIn('unit: "usd_b"', html)
-            self.assertIn('timeframes: ["1D", "1W", "1M"]', html)
+            self.assertIn('source: "yahoo"', html)
+            self.assertIn('symbol: "SPCX"', html)
+            self.assertIn('yahooSymbol: "SPCX"', html)
             self.assertIn('label: "Tesla"', html)
             self.assertIn('label: "S&P 500"', html)
             self.assertIn('label: "NASDAQ"', html)
@@ -4693,6 +4804,8 @@ class WatchtowerUnitTests(unittest.TestCase):
             self.assertIn("investmentRowsFromYahoo", html)
             self.assertIn("investmentAggregateRows", html)
             self.assertIn("investmentPreloadedData", html)
+            self.assertIn("investment-watchlist.json", html)
+            self.assertIn("fetchInvestmentWatchlistData", html)
             self.assertIn('return "$" + parsed.toLocaleString', html)
             self.assertIn("hydrateInvestmentWatchlist", html)
             self.assertGreaterEqual(
@@ -4717,6 +4830,7 @@ class WatchtowerUnitTests(unittest.TestCase):
             self.assertIn("KAS/USDT Futures Trend 7D", html)
             self.assertIn("Market Data Sources", html)
             self.assertIn("Bybit linear perp", html)
+
             self.assertIn("KAS/USDT Futures Liquidation Map 12H", html)
             self.assertIn("KAS/USDT Futures Liquidation Map 24H", html)
             self.assertIn("KAS/USDT Futures Liquidation Map 1W", html)
@@ -5053,6 +5167,19 @@ class WatchtowerUnitTests(unittest.TestCase):
             self.assertIn("10s mempool size", html)
             self.assertIn("Relay Intake", html)
             self.assertIn("16 relay blocks", html)
+
+    def test_investment_market_data_file_written_next_to_status_page(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            status_path = Path(temp_dir) / "status.html"
+            watchtower.write_investment_market_data_file(
+                status_path,
+                {"tesla": {"timeframes": {"15m": {"ok": True, "rows": [{"close": 1}]}}}},
+            )
+
+            payload = json.loads((Path(temp_dir) / "investment-watchlist.json").read_text(encoding="utf-8"))
+
+        self.assertIn("generated_at", payload)
+        self.assertEqual(payload["assets"]["tesla"]["timeframes"]["15m"]["rows"][0]["close"], 1)
 
     def test_stream_page_uses_1080p_rotating_scene_layout(self):
         with tempfile.TemporaryDirectory() as tmp:
